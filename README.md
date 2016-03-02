@@ -24,7 +24,7 @@ Python3 is required. On Debian and derivatives, you can install it with:
 Then, if you want to download the full repository:
 
     git clone https://github.com/michaelnmmeyer/gutenberg
-    sudo make -D gutenberg install
+    sudo make -C gutenberg install
 
 Alternatively, you can just copy the script to some location in your `PATH`:
 
