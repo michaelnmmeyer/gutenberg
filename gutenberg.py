@@ -601,10 +601,10 @@ class Gutenberg(object):
    
    def text(self, query):
       query = normalize(str(query))      
-      ret = self.conn.execute("""SELECT contents FROM Data NATURAL JOIN Search
-         WHERE Search match ?""", (query,)).fetchone()
-      if ret:
-         return zlib.decompress(ret[0]).decode()
+      for (blob,) in self.conn.execute("""SELECT contents
+         FROM Data NATURAL JOIN Search WHERE Search match ?""", (query,)):
+         text = zlib.decompress(blob).decode()
+         yield text
    
    def queries(self):
       for (q,) in self.conn.execute("""SELECT query FROM DownloadQueries
@@ -672,11 +672,8 @@ def cmd_search(argv):
       print(json.dumps(doc, ensure_ascii=False))
 
 def cmd_text(argv):
-   gut = Gutenberg()
-   for doc in gut.search(argv[0]):
-      text = gut.text(doc["key"])
-      if text:
-         print(text)
+   for text in Gutenberg().text(argv[0]):
+      print(text)
 
 def cmd_download(argv):
    Gutenberg().download(argv[0])
