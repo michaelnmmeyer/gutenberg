@@ -470,6 +470,7 @@ ENCS_TBL = {
    "ascii, with some iso-8859-1 characters": None,
    "windows codepage 1252": "Windows-1252",
    "cp-1252": "Windows-1252",
+   "windows code page 1252": "Windows-1252",
 }
 
 # Some books have several encodings, some have none. We try UTF-8 first because
