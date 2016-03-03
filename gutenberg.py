@@ -711,8 +711,8 @@ Search commands:
 Download commands:
    download <query>  download all ebooks matching a query
    forget <query>    don't download new ebooks matching a query
-   update            update the metadata catalog, download new ebooks matching
-                       submitted queries, update the downloaded ebooks"""
+   update            download new ebooks matching submitted queries, update the
+                       downloaded ebooks"""
 
 def usage():
    me = os.path.basename(sys.argv[0])
