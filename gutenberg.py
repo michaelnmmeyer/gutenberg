@@ -474,11 +474,14 @@ ENCS_TBL = {
    "windows code page 1252": "Windows-1252",
 }
 
+ENCODINGS_RE = re.compile(b"^(?:character set )?encoding:\s*([^\r\n]+)",
+                          re.I | re.MULTILINE)
+
 # Some books have several encodings, some have none. We try UTF-8 first because
 # it is not ambiguous. LATIN-1 is last resort.
 def extract_encodings(ebook):
    encs = ["UTF-8"]
-   for enc in re.findall(b"(?:character set )?encoding:\s*([^\r\n]+)", ebook, re.I):
+   for enc in ENCODINGS_RE.findall(ebook):
       enc = enc.decode()
       enc = ENCS_TBL.get(enc.lower(), enc)
       if enc:
@@ -498,6 +501,8 @@ def download(key, prev_mod):
          text = data.decode(enc)
       except UnicodeDecodeError:
          continue
+      except LookupError:
+         die("unknown encoding in %s (%s): '%s'" % (key, url, enc))
       text = remove_boilerplate(cleanup(text))
       text = zlib.compress(text.encode("UTF-8"), 9)
       return key, text, url, last_mod
