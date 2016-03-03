@@ -401,17 +401,25 @@ def parse_xml(fp):
    return fields
 
 if __name__ == "__main__":
+   PROGNAME = os.path.basename(sys.argv[0])
+
    def inform(msg):
-      me = os.path.basename(sys.argv[0])
-      print("%s: %s" % (me, msg), file=sys.stderr)
+      print("%s: %s" % (PROGNAME, msg), file=sys.stderr)
       sys.stderr.flush()
-   
+
+   def progress(nr, total):
+      sys.stderr.write("%s: %d/%d\r" % (PROGNAME, nr, total))
+      sys.stderr.flush()
+
    def die(msg=None):
       if msg is not None:
          inform(msg)
       sys.exit(1)
 else:
    def inform(msg):
+      pass
+
+   def progress(nr, total):
       pass
 
    class GutenbergError(Exception):
@@ -454,6 +462,7 @@ def download_ebook_text(base_url, key, prev_mod):
       last_mod = get_last_modified(fp)
       if last_mod > prev_mod:
          return fp.read(), url, last_mod
+      return (key,)
 
 ENCS_TBL = {
    "iso-646-us (us-ascii)": None,
@@ -490,11 +499,10 @@ def extract_encodings(ebook):
    return encs
 
 def download(key, prev_mod):
-   inform("downloading %s" % key)
    base = make_book_url(key)
    ret = download_ebook_text(base, key, prev_mod)
-   if not ret:
-      return
+   if ret is None or len(ret) == 1:
+      return ret
    data, url, last_mod = ret
    for enc in extract_encodings(data):
       try:
@@ -564,7 +572,7 @@ def iter_catalog(url):
          break
       key = int(os.path.basename(os.path.dirname(tinfo.name)))
       yield key, tf.extractfile(tinfo)
-      
+
 
 class Gutenberg(object):
 
@@ -661,16 +669,21 @@ class Gutenberg(object):
       self.download_keys(keys)
    
    def download_keys(self, keys):
-      inform("downloading %d files (%d workers)" % (len(keys), self.num_workers))
+      inform("downloading %d files with %d workers" % (len(keys), self.num_workers))
       p = Pool(self.num_workers)
-      itor = filter(None, p.imap_unordered(try_download, keys))
+      itor = p.imap_unordered(try_download, keys)
       cur = self.conn.cursor()
       for nr, data in enumerate(itor, 1):
-         cur.execute("""
-         INSERT OR REPLACE
+         if data is None:
+            pass
+         elif len(data) == 1:
+            cur.execute("""UPDATE Data SET when_downloaded = datetime('now')
+            WHERE key = ?""", data)
+         else:
+            cur.execute("""INSERT OR REPLACE
             INTO Data(key, contents, url, last_modified, when_downloaded)
-            VALUES(?, ?, ?, ?, datetime('now'))""",
-            data)
+            VALUES(?, ?, ?, ?, datetime('now'))""", data)
+         progress(nr, len(keys))
          if nr % 10 == 0:
             self.conn.commit()
       self.conn.commit()
