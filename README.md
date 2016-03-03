@@ -68,6 +68,10 @@ The above deletes the submitted query from the database, so that it won't be
 executed again when `gutenberg update` is called. Downloaded ebooks will still
 be updated.
 
+To display all currently active queries, use the following:
+
+    $ gutenberg queries
+
 Finally, to display the contents of the ebooks we just downloaded, we can issue
 the following:
 
