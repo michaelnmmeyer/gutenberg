@@ -685,7 +685,7 @@ def cmd_search(argv):
 
 def cmd_text(argv):
    for text in Gutenberg().text(argv[0]):
-      print(text)
+      sys.stdout.write(text)
 
 def cmd_download(argv):
    Gutenberg().download(argv[0])
