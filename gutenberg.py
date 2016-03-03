@@ -738,5 +738,5 @@ if __name__ == "__main__":
       usage()
    try:
       cmd["func"](argv[2:])
-   except KeyboardInterrupt:
+   except (KeyboardInterrupt, BrokenPipeError):
       die()
