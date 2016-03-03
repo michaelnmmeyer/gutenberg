@@ -466,6 +466,7 @@ ENCS_TBL = {
    "ido-8859-1": None,
    "ascii, with a few iso-8859-1 characters": None,
    "ascii, with a couple of iso-8859-1 characters": None,
+   "ascii, with one iso-8859-1 character": None,
    "windows codepage 1252": "Windows-1252",
    "cp-1252": "Windows-1252",
 }
