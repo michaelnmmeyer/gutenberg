@@ -617,6 +617,7 @@ class Gutenberg(object):
       self.conn.commit()
 
    def download(self, query):
+      query = normalize(str(query))
       cur = self.conn.cursor()
       cur.execute("""
       INSERT OR REPLACE INTO DownloadQueries(query, last_issued)
