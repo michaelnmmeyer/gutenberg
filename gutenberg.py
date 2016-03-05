@@ -29,7 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 import os, sys, re, sqlite3, tarfile, json
-import random, urllib, unicodedata, zlib, time
+import random, urllib, unicodedata, zlib, time, datetime
 from urllib.request import urlopen
 from xml.etree import ElementTree
 from multiprocessing import Pool
@@ -74,7 +74,7 @@ SCHEMA = """\
 CREATE TABLE IF NOT EXISTS Infos(
    key TEXT PRIMARY KEY UNIQUE NOT NULL,
    value TEXT NOT NULL
-);
+) WITHOUT ROWID;
 
 /* List of issued download queries.
  * - last_issued: last time the query was issued, not necessarily the last time
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS Infos(
 CREATE TABLE IF NOT EXISTS DownloadQueries(
    query TEXT PRIMARY KEY UNIQUE NOT NULL,
    last_issued DATETIME NOT NULL
-);
+) WITHOUT ROWID;
 
 /* Ebooks metadata.
  * This is constructed from the Gutenberg catalog. Ebooks that are not available
@@ -91,22 +91,31 @@ CREATE TABLE IF NOT EXISTS DownloadQueries(
  * - key: the ebook identifier.
  * - metadata: metadata extracted from the Gutenberg catalog. This is a JSON
  *   document. It contains the following fields:
- *   - author: list of authors
+ *   - key: the ebook identifier (an unsigned integer).
+ *   - author: list of authors.
  *   - title: book title, as a list of strings. There is one string per title
  *     line. When a book title spans multiple lines, it is often the case that
  *     the title proper is on the first line, and subtitles follow.
- *   - language: list of languages
- *   - subject: list of subjects
+ *   - language: list of languages.
+ *   - subject: list of subjects.
  *   All strings are encoded to UTF-8 and normalized to NFC.
- * - url: where to find the book (plain-text UTF-8 version) on the Gutenberg
- *   website. This URL is not used for downloads because there are limitations
- *   on the number of downloadable ebooks per day.
+ * - name: name of the file to download. Download URLs are generated
+ *   dynamically. Can be of two forms:
+ *   - 11716.txt, 11716-8.txt, 11716-0.txt, etc.
+ *   - etext96/zncli10.txt
+ * - encoding: encoding of the above file.
+ * - last_modified: last modification of the above file, as reported by the
+ *   Gutenberg catalog. Doesn't necessarily correspond to the real last
+ *   modification date of the file due to sloppy editing of the Gutenberg
+ *   catalog.
  */
 CREATE TABLE IF NOT EXISTS Metadata(
    key INTEGER PRIMARY KEY UNIQUE NOT NULL,
    metadata TEXT NOT NULL,
-   url TEXT UNIQUE NOT NULL
-);
+   name TEXT UNIQUE NOT NULL,
+   encoding TEXT NOT NULL,
+   last_modified DATETIME NOT NULL
+) WITHOUT ROWID;
 
 /* Full-text index, for searching the contents of the metadata table.
  * Before indexing, values associated to a field are normalized to NFKC. Unicode
@@ -130,8 +139,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS Search USING fts3(
  * - contents: ebook text, encoded to UTF-8, normalized to NFC, compressed with
  *   zlib. Boilerplate legalese is stripped.
  * - url: where the ebook was downloaded.
- * - last_modified: date of last modification, as reported by the server from
- *   which the ebook was downloaded.
+ * - last_modified: date of last modification. This is the date reported by the
+ *   Gutenberg catalog, not the one reported by the server from which the file
+ *   was downloaded.
  * - when_downloaded: when the ebook was downloaded.
  */
 CREATE TABLE IF NOT EXISTS Data(
@@ -140,7 +150,7 @@ CREATE TABLE IF NOT EXISTS Data(
    url TEXT UNIQUE NOT NULL,
    last_modified DATETIME NOT NULL,
    when_downloaded DATETIME NOT NULL
-);
+) WITHOUT ROWID;
 """
 
 # Boilerplate removal code is borrowed from:
@@ -342,7 +352,7 @@ def find_attrib(node, expr):
          return value
    assert 0
 
-def extract_author(ebook):
+def extract_author(ebook, key):
    authors = []
    nodes = find_nodes(ebook, "dcterms:creator/pgterms:agent/pgterms:name")
    for node in nodes:
@@ -356,49 +366,131 @@ def extract_author(ebook):
       authors.append(author)
    return authors
 
-def extract_title(ebook):
+def extract_title(ebook, key):
    # There is one file with two titles (nearly the same).
    nodes = find_nodes(ebook, "dcterms:title")
    if nodes:
       return nodes[0].text.splitlines()
    return []
 
-def extract_language(ebook):
+def extract_language(ebook, key):
    nodes = find_nodes(ebook, "dcterms:language/rdf:Description/rdf:value")
    return [node.text for node in nodes]
 
-def extract_subject(ebook):
+def extract_subject(ebook, key):
    nodes = find_nodes(ebook, "dcterms:subject/rdf:Description/rdf:value")
    return [node.text for node in nodes]
 
-TEXT_MIME = ("text/plain; charset=utf-8", "text/plain")
-
-def extract_url(ebook):
+# There are a few empty files (e.g. 0 and 1070). There are also files that are
+# not available as plain text.
+def find_versions(ebook, key):
+   files = {}
    for file in find_nodes(ebook, "dcterms:hasFormat/pgterms:file"):
       formats = find_nodes(file, "dcterms:format/rdf:Description/rdf:value")
-      if len(formats) == 1 and formats[0].text in TEXT_MIME:
-         return find_attrib(file, "rdf:about")
+      # ZIP files.
+      if len(formats) != 1:
+         continue
+      mime = formats[0].text.strip()
+      # Only care about plain text ebooks.
+      if not mime.startswith("text/plain"):
+         continue
+      url = find_attrib(file, "rdf:about").strip()
+      # Checking the mime type is not enough, there is a TIF file wrongly
+      # reported as being plain text. Also, *.txt.utf-8 files are automatically
+      # generated from other sources and can only be downloaded from the main
+      # Gutenberg site, which has download limits; their modification date is
+      # not reliable.
+      ext = os.path.splitext(url)[1].lower()
+      if ext != ".txt":
+         continue
+
+      # The catalog is rife with invalid links and typos:
+      #   http://www.gutenberg.org/files/11052/11502-8.txt
+      #   http://www.gutenberg.org/1/1/7/5/6/11756-0.txt
+      # There are also useless files:
+      #   http://www.gutenberg.org/files/31423/test.txt
+      # Interesting files are of the form:
+      #   http://www.gutenberg.org/files/11716/11716-8.txt
+      #   http://www.gutenberg.org/dirs/etext96/zncli10.txt
+      # We add a few exceptions to the {key}(-{digit})? format. This doesn't
+      # cover all possible cases.
+      dir, name = url.rsplit("/")[-2:]
+      if dir.startswith("etext"):
+         pass
+      elif re.match(r"^%d(-(\d|txt|u|body|utf-16|utf-8))?.txt$" % key, name):
+         pass
+      else:
+         continue
+
+      # Encoding
+      encoding = re.match("text/plain; charset=(.+)", mime)
+      encoding = encoding and encoding.group(1) or "utf-8"
+      # Last modification date, in the format of sqlite's datetime().
+      last_mod = find_node(file, "dcterms:modified").text
+      parts = tuple(int(n) for n in re.findall(r"\d+", last_mod))
+      last_mod = datetime.datetime(*parts).strftime("%Y-%m-%d %H:%M:%S")
+      # In case there are several versions of the same file.
+      _, prev_mod = files.get(url, ("", ""))
+      if last_mod > prev_mod:
+         files[url] = (encoding, last_mod)
+
+   return [(url, vals[0], vals[1]) for url, vals in files.items()]
+
+def extract_download_infos(ebook, key):
+   files = find_versions(ebook, key)
+   if not files:
+      return None, None, None
+
+   # Most recent files first.
+   files.sort(key=lambda x: x[2], reverse=True)
+
+   # When the same file is available in ASCII and LATIN1, etc., the ASCII
+   # version is lossy, so we prefer other versions. Likewise, we prefer UTF-8
+   # to LATIN-1 and others.
+   encs = {}
+   for url, enc, last_mod in files:
+      encs.setdefault(enc, []).append((url, last_mod))
+   if len(encs) > 1 and "us-ascii" in encs:
+      del encs["us-ascii"]
+   if "utf-8" in encs:
+      enc = "utf-8"
+      url, last_mod = encs["utf-8"][0]
+   else:
+      enc, vals = encs.popitem()
+      url, last_mod = vals[0]
+   
+   # Keep the constant part of the final URL:
+   #   http://www.gutenberg.org/files/11716/11716-8.txt -> 11716-8.txt
+   #   http://www.gutenberg.org/dirs/etext96/zncli10.txt -> etext96/zncli10.txt
+   parts = url.rsplit("/", 2)
+   if parts[-2].startswith("etext"):
+      name = "/".join(parts[-2:])
+   else:
+      name = parts[-1]
+   return name, enc, last_mod
 
 EXTRACTORS = {
    "author": extract_author,
    "title": extract_title,
    "language": extract_language,
    "subject": extract_subject,
-   "url": extract_url,
 }
 
-def parse_xml(fp):
+def parse_xml(fp, key):
    tree = ElementTree.parse(fp)
    ebook = find_node(tree, "pgterms:ebook")
+   name, enc, last_mod = extract_download_infos(ebook, key)
+   if name is None:
+      return None, None, None, None
    fields = {}
    for field, func in EXTRACTORS.items():
-      ret = func(ebook)
+      ret = func(ebook, key)
       if isinstance(ret, str):
          ret = cleanup(ret)
       elif ret is not None:
          ret = [cleanup(c) for c in ret]
       fields[field] = ret
-   return fields
+   return name, enc, last_mod, fields
 
 if __name__ == "__main__":
    PROGNAME = os.path.basename(sys.argv[0])
@@ -407,8 +499,8 @@ if __name__ == "__main__":
       print("%s: %s" % (PROGNAME, msg), file=sys.stderr)
       sys.stderr.flush()
 
-   def progress(nr, total):
-      sys.stderr.write("%s: %d/%d\r" % (PROGNAME, nr, total))
+   def progress(nr, total, num_workers):
+      sys.stderr.write("%s: downloading %d/%d files (%d workers)\r" % (PROGNAME, nr, total, num_workers))
       sys.stderr.flush()
 
    def die(msg=None):
@@ -419,7 +511,7 @@ else:
    def inform(msg):
       pass
 
-   def progress(nr, total):
+   def progress(*args):
       pass
 
    class GutenbergError(Exception):
@@ -428,14 +520,18 @@ else:
    def die(msg=None):
       raise GutenbergError(msg is not None and msg or "unknown error")
 
-# 832 -> https://www.ibiblio.org/pub/docs/books/gutenberg/8/3/832/
-def make_book_url(key):
+# 3.txt -> https://www.ibiblio.org/pub/docs/books/gutenberg/0/3/3.txt
+# 832.txt -> https://www.ibiblio.org/pub/docs/books/gutenberg/8/3/832/832.txt
+# etext96/zncli10.txt -> https://www.ibiblio.org/pub/docs/books/gutenberg/etext96/zncli10.txt
+def make_book_url(key, name):
+   mirror = random.choice(gutenberg_mirrors())
+   if name.startswith("etext"):
+      return "%s/%s" % (mirror, name)
    if int(key) < 10:
       parts = "0/%s" % key
    else:
       parts = "%s/%s" % ("/".join(str(key)[:-1]), key)
-   mirror = random.choice(gutenberg_mirrors())
-   return "%s/%s/" % (mirror, parts)
+   return "%s/%s/%s" % (mirror, parts, name)
 
 # Extracts the value of the "Last-modified" header, formats is like the SQLite
 # function datetime().
@@ -444,82 +540,43 @@ def get_last_modified(fp):
    assert last_mod
    ret = parsedate(last_mod)
    assert ret
-   return time.strftime("%Y-%m-%d %H:%M:%S", ret)
+   # Allow a 1-day slop to account for time zones mismatches and errors in the
+   # catalog (modification date not matching the real file modification date,
+   # even after timezone adjustments, possibly because someone didn't use the
+   # real file modification date). In practice, there is no reliable way to
+   # determine if the file we intend to download is really the last available
+   # version.
+   ret = datetime.datetime(*ret[:6]) + datetime.timedelta(1)
+   return time.strftime("%Y-%m-%d %H:%M:%S", ret.utctimetuple())
 
-def download_ebook_text(base_url, key, prev_mod):
-   try:
-      with urlopen(base_url) as fp:
-         html = fp.read().decode()
-   except (urllib.error.HTTPError, urllib.error.URLError) as e:
-      inform("cannot download '%s': %s" % (base_url, e))
-      return
-   names = re.findall(r'href="(%s.*\.txt)"' % key, html)
-   if not names:
-      inform("cannot download '%s': no data" % base_url)
-      return
-   url = base_url + names[0]
+def download_ebook_text(url, enc, prev_mod, downloaded):
    with urlopen(url) as fp:
       last_mod = get_last_modified(fp)
-      if last_mod > prev_mod:
-         return fp.read(), url, last_mod
-      return (key,)
+      if not downloaded or last_mod >= prev_mod:
+         data = fp.read()
+         # Sloppy editing, as usual.
+         encs = [enc, "utf-8", "iso-8859-1", "windows-1252", "iso-8859-15"]
+         for enc in encs:
+            try:
+               return url, prev_mod, data.decode(enc)
+            except UnicodeDecodeError:
+               pass
+         inform("cannot download '%s' (invalid encoding)" % url)
+   return None, None, None
 
-ENCS_TBL = {
-   "iso-646-us (us-ascii)": None,
-   "utf-8": None,
-   "iso-latin-1": None,
-   "iso latin-1": None,
-   "iso 8859-1 (latin-1)": None,
-   "iso-8858-1": None,
-   "iso-8859-1": None,
-   "ido-8859-1": None,
-   "ascii, with a few iso-8859-1 characters": None,
-   "ascii, with a couple of iso-8859-1 characters": None,
-   "ascii, with one iso-8859-1 character": None,
-   "ascii, with some iso-8859-1 characters": None,
-   "acii, with some iso-8859-1 characters": None,
-   "windows codepage 1252": "Windows-1252",
-   "cp-1252": "Windows-1252",
-   "windows code page 1252": "Windows-1252",
-}
-
-ENCODINGS_RE = re.compile(b"^(?:character set )?encoding:\s*([^\r\n]+)",
-                          re.I | re.MULTILINE)
-
-# Some books have several encodings, some have none. We try UTF-8 first because
-# it is not ambiguous. LATIN-1 is last resort.
-def extract_encodings(ebook):
-   encs = ["UTF-8"]
-   for enc in ENCODINGS_RE.findall(ebook):
-      enc = enc.decode()
-      enc = ENCS_TBL.get(enc.lower(), enc)
-      if enc:
-         encs.append(enc)
-   encs.append("LATIN-1")
-   return encs
-
-def download(key, prev_mod):
-   base = make_book_url(key)
-   ret = download_ebook_text(base, key, prev_mod)
-   if ret is None or len(ret) == 1:
-      return ret
-   data, url, last_mod = ret
-   for enc in extract_encodings(data):
-      try:
-         text = data.decode(enc)
-      except UnicodeDecodeError:
-         continue
-      except LookupError:
-         die("unknown encoding in %s (%s): '%s'" % (key, url, enc))
-      text = remove_boilerplate(cleanup(text))
-      text = zlib.compress(text.encode("UTF-8"), 9)
-      return key, text, url, last_mod
-   die("cannot decode ebook at '%s'" % url)
+def download(key, name, encoding, prev_mod, downloaded):
+   url = make_book_url(key, name)
+   url, last_mod, text = download_ebook_text(url, encoding, prev_mod, downloaded)
+   if not url:
+      return
+   text = remove_boilerplate(cleanup(text))
+   text = zlib.compress(text.encode("UTF-8"), 9)
+   return key, text, url, last_mod
 
 def try_download(args):
-   key, prev_mod = args
+   key, name, encoding, last_modified, downloaded = args
    try:
-      return download(key, prev_mod)
+      return download(key, name, encoding, last_modified, downloaded)
    except KeyboardInterrupt:
       die()
 
@@ -545,8 +602,8 @@ def normalize(s):
 def make_document(fields):
    doc = {}
    for field, values in fields.items():
-      if isinstance(values, str):
-         values = [values]
+      if isinstance(values, (str, int)):
+         values = [str(values)]
       doc[field] = " ".join(normalize(value) for value in values)
    return doc
 
@@ -594,36 +651,33 @@ class Gutenberg(object):
       cur = self.conn.cursor()
       cur.executescript("DELETE FROM Metadata; DELETE FROM Search;")
       for key, fp in iter_catalog(self.catalog_url):
-         fields = parse_xml(fp)
-         # There are a few empty files (e.g. 0 and 1070). There are also files
-         # that are not available as plain text.
-         url = fields.pop("url")
-         if not url:
+         name, enc, last_mod, fields = parse_xml(fp, key)
+         if name is None:
             continue
-         cur.execute("INSERT INTO Metadata(key, metadata, url) VALUES(?, ?, ?)",
-                     (key, json.dumps(fields, ensure_ascii=False), url))
-         fields["key"] = [str(key)]
+         fields["key"] = key
+         cur.execute("""INSERT INTO Metadata(
+            key, metadata, name, encoding, last_modified
+         ) VALUES(?, ?, ?, ?, ?)""",
+         (key, json.dumps(fields, ensure_ascii=False), name, enc, last_mod))
          doc = make_document(fields)
-         cur.execute("""INSERT INTO SEARCH(key, language, author, title, subject)
-            VALUES(:key, :language, :author, :title, :subject)""", doc)
+         cur.execute("""INSERT INTO SEARCH(
+            key, language, author, title, subject
+         ) VALUES(:key, :language, :author, :title, :subject)""", doc)
       cur.execute("""INSERT OR REPLACE INTO Infos(key, value)
          VALUES('last_catalog_update', datetime('now'))""")
       self.conn.commit()
 
    def search(self, query):
       query = normalize(str(query))   
-      for key, metadata in self.conn.execute("""SELECT key, metadata
+      for (metadata,) in self.conn.execute("""SELECT metadata
          FROM Metadata NATURAL JOIN Search WHERE Search match ?""", (query,)):
-         metadata = json.loads(metadata)
-         metadata["key"] = key
-         yield metadata
+         yield json.loads(metadata)
    
    def text(self, query):
       query = normalize(str(query))      
       for (blob,) in self.conn.execute("""SELECT contents
-         FROM Data NATURAL JOIN Search WHERE Search match ?""", (query,)):
-         text = zlib.decompress(blob).decode()
-         yield text
+         FROM Data NATURAL JOIN Search WHERE Search match ?""", (query,)):      
+         yield zlib.decompress(blob).decode()
    
    def queries(self):
       for (q,) in self.conn.execute("""SELECT query FROM DownloadQueries
@@ -643,51 +697,58 @@ class Gutenberg(object):
          VALUES (?, datetime('now'))""", (query,))
       self.conn.commit()
       keys = list(cur.execute("""
-      SELECT Search.key, COALESCE(last_modified, '')
-         FROM Search LEFT OUTER JOIN Data ON Search.key = Data.key
-         WHERE Search MATCH ? AND COALESCE(when_downloaded, '') <
-            (SELECT value FROM Infos WHERE Infos.key = 'last_catalog_update')
+      SELECT Metadata.key, Metadata.name,
+             Metadata.encoding, Metadata.last_modified,
+             Data.when_downloaded
+      FROM Search INNER JOIN Metadata ON Search.key = Metadata.key
+         	      LEFT OUTER JOIN Data ON Metadata.key = Data.key
+      WHERE Search MATCH ?
+         	AND Metadata.last_modified > COALESCE(Data.last_modified, '')
       """, (query,)))
-      self.download_keys(keys)
+      if keys:
+         self.download_keys(keys)
 
    def update(self):
       cur = self.conn.cursor()
       # We download new files first, then update the ones we've already
       # downloaded.
       keys = list(cur.execute("""
-      WITH Keys AS (
-         SELECT Metadata.key
-            FROM Search NATURAL JOIN Metadata JOIN DownloadQueries
-            WHERE Search MATCH query
-         UNION SELECT key FROM Data
-      )
-      SELECT Keys.key, COALESCE(last_modified, '')
-         FROM Keys LEFT OUTER JOIN Data ON Keys.key = Data.key
-         WHERE COALESCE(when_downloaded, '') < (SELECT value FROM Infos
-            WHERE Infos.key = 'last_catalog_update')
-         ORDER BY COALESCE(when_downloaded, '')"""))
-      self.download_keys(keys)
+      SELECT Metadata.key, Metadata.name,
+             Metadata.encoding, Metadata.last_modified,
+             COALESCE(Data.when_downloaded, '') AS downloaded
+      FROM Search INNER JOIN Metadata ON Search.key = Metadata.key
+            	   INNER JOIN DownloadQueries
+         	      LEFT OUTER JOIN Data ON Metadata.key = Data.key
+      WHERE Search MATCH query
+         	AND Metadata.last_modified > COALESCE(Data.last_modified, '')
+      UNION
+      SELECT Metadata.key, Metadata.name,
+             Metadata.encoding, Metadata.last_modified,
+             Data.when_downloaded AS downloaded
+      FROM Metadata INNER JOIN Data ON Metadata.key = Data.key
+      WHERE Metadata.last_modified > Data.last_modified
+      ORDER BY downloaded"""))
+      if keys:
+         self.download_keys(keys)
    
    def download_keys(self, keys):
-      inform("downloading %d files with %d workers" % (len(keys), self.num_workers))
       p = Pool(self.num_workers)
       itor = p.imap_unordered(try_download, keys)
       cur = self.conn.cursor()
-      for nr, data in enumerate(itor, 1):
-         if data is None:
-            pass
-         elif len(data) == 1:
-            cur.execute("""UPDATE Data SET when_downloaded = datetime('now')
-            WHERE key = ?""", data)
-         else:
-            cur.execute("""INSERT OR REPLACE
-            INTO Data(key, contents, url, last_modified, when_downloaded)
-            VALUES(?, ?, ?, ?, datetime('now'))""", data)
-         progress(nr, len(keys))
-         if nr % 10 == 0:
-            self.conn.commit()
-      self.conn.commit()
-
+      nr = 0
+      try:
+         for i, data in enumerate(itor, 1):
+            if data:
+               cur.execute("""INSERT OR REPLACE
+               INTO Data(key, contents, url, last_modified, when_downloaded)
+               VALUES(?, ?, ?, ?, datetime('now'))""", data)
+               nr += 1
+               if nr % 10 == 0:
+                  self.conn.commit()
+            progress(i, len(keys), self.num_workers)
+         self.conn.commit()
+      finally:
+         sys.stderr.write("\n")
 
 def cmd_search(argv):
    from collections import OrderedDict
@@ -734,7 +795,7 @@ Search commands:
 Download commands:
    download <query>  download all ebooks matching a query
    forget <query>    don't download new ebooks matching a query
-   update            download new ebooks matching submitted queries, update the
+   update            download new ebooks matching submitted queries, update
                        downloaded ebooks"""
 
 def usage():

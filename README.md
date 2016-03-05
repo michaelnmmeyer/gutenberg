@@ -127,7 +127,7 @@ created at `~/.gutenberg`. Its schema is the following:
     CREATE TABLE IF NOT EXISTS Infos(
        key TEXT PRIMARY KEY UNIQUE NOT NULL,
        value TEXT NOT NULL
-    );
+    ) WITHOUT ROWID;
     
     /* List of issued download queries.
      * - last_issued: last time the query was issued, not necessarily the last time
@@ -136,7 +136,7 @@ created at `~/.gutenberg`. Its schema is the following:
     CREATE TABLE IF NOT EXISTS DownloadQueries(
        query TEXT PRIMARY KEY UNIQUE NOT NULL,
        last_issued DATETIME NOT NULL
-    );
+    ) WITHOUT ROWID;
     
     /* Ebooks metadata.
      * This is constructed from the Gutenberg catalog. Ebooks that are not available
@@ -144,22 +144,31 @@ created at `~/.gutenberg`. Its schema is the following:
      * - key: the ebook identifier.
      * - metadata: metadata extracted from the Gutenberg catalog. This is a JSON
      *   document. It contains the following fields:
-     *   - author: list of authors
+     *   - key: the ebook identifier (an unsigned integer).
+     *   - author: list of authors.
      *   - title: book title, as a list of strings. There is one string per title
      *     line. When a book title spans multiple lines, it is often the case that
      *     the title proper is on the first line, and subtitles follow.
-     *   - language: list of languages
-     *   - subject: list of subjects
+     *   - language: list of languages.
+     *   - subject: list of subjects.
      *   All strings are encoded to UTF-8 and normalized to NFC.
-     * - url: where to find the book (plain-text UTF-8 version) on the Gutenberg
-     *   website. This URL is not used for downloads because there are limitations
-     *   on the number of downloadable ebooks per day.
+     * - name: name of the file to download. Download URLs are generated
+     *   dynamically. Can be of two forms:
+     *   - 11716.txt, 11716-8.txt, 11716-0.txt, etc.
+     *   - etext96/zncli10.txt
+     * - encoding: encoding of the above file.
+     * - last_modified: last modification of the above file, as reported by the
+     *   Gutenberg catalog. Doesn't necessarily correspond to the real last
+     *   modification date of the file due to sloppy editing of the Gutenberg
+     *   catalog.
      */
     CREATE TABLE IF NOT EXISTS Metadata(
        key INTEGER PRIMARY KEY UNIQUE NOT NULL,
        metadata TEXT NOT NULL,
-       url TEXT UNIQUE NOT NULL
-    );
+       name TEXT UNIQUE NOT NULL,
+       encoding TEXT NOT NULL,
+       last_modified DATETIME NOT NULL
+    ) WITHOUT ROWID;
     
     /* Full-text index, for searching the contents of the metadata table.
      * Before indexing, values associated to a field are normalized to NFKC. Unicode
@@ -183,8 +192,9 @@ created at `~/.gutenberg`. Its schema is the following:
      * - contents: ebook text, encoded to UTF-8, normalized to NFC, compressed with
      *   zlib. Boilerplate legalese is stripped.
      * - url: where the ebook was downloaded.
-     * - last_modified: date of last modification, as reported by the server from
-     *   which the ebook was downloaded.
+     * - last_modified: date of last modification. This is the date reported by the
+     *   Gutenberg catalog, not the one reported by the server from which the file
+     *   was downloaded.
      * - when_downloaded: when the ebook was downloaded.
      */
     CREATE TABLE IF NOT EXISTS Data(
@@ -193,4 +203,4 @@ created at `~/.gutenberg`. Its schema is the following:
        url TEXT UNIQUE NOT NULL,
        last_modified DATETIME NOT NULL,
        when_downloaded DATETIME NOT NULL
-    );
+    ) WITHOUT ROWID;
