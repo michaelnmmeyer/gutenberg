@@ -573,12 +573,21 @@ def download(key, name, encoding, prev_mod, downloaded):
    text = zlib.compress(text.encode("UTF-8"), 9)
    return key, text, url, last_mod
 
+MAX_RETRY = 3
+
 def try_download(args):
    key, name, encoding, last_modified, downloaded = args
-   try:
-      return download(key, name, encoding, last_modified, downloaded)
-   except KeyboardInterrupt:
-      die()
+   tries = 0
+   while True:
+      try:
+         return download(key, name, encoding, last_modified, downloaded)
+      except KeyboardInterrupt:
+         die()
+      except urllib.error.URLError:
+         if tries >= MAX_RETRY:
+            inform("cannot download '%s': connection error" % key)
+            return
+         tries += 1
 
 LIGATURES_TBL = str.maketrans({
    "œ": "oe",
