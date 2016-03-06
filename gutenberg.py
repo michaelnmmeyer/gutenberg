@@ -583,7 +583,7 @@ def try_download(args):
          return download(key, name, encoding, last_modified, downloaded)
       except KeyboardInterrupt:
          die()
-      except urllib.error.URLError:
+      except (urllib.error.URLError, urllib.error.HTTPError):
          if tries >= MAX_RETRY:
             inform("cannot download '%s': connection error" % key)
             return
