@@ -153,7 +153,7 @@ created at `~/.gutenberg`. Its schema is the following:
      *   - subject: list of subjects.
      *   All strings are encoded to UTF-8 and normalized to NFC.
      * - name: name of the file to download. Download URLs are generated
-     *   dynamically. Can be of two forms:
+     *   dynamically. File names are of two forms:
      *   - 11716.txt, 11716-8.txt, 11716-0.txt, etc.
      *   - etext96/zncli10.txt
      * - encoding: encoding of the above file.
