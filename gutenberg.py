@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS DownloadQueries(
  *   - subject: list of subjects.
  *   All strings are encoded to UTF-8 and normalized to NFC.
  * - name: name of the file to download. Download URLs are generated
- *   dynamically. Can be of two forms:
+ *   dynamically. File names are of two forms:
  *   - 11716.txt, 11716-8.txt, 11716-0.txt, etc.
  *   - etext96/zncli10.txt
  * - encoding: encoding of the above file.
@@ -631,7 +631,7 @@ def iter_catalog(url):
       tf = tarfile.open(mode="r|bz2", fileobj=fp)
    except tarfile.ReadError:
       # Most likely issue.
-      die("cannot download catalog; too much downloads?")
+      die("cannot read catalog; too much downloads?")
    while True:
       tinfo = tf.next()
       if not tinfo:
@@ -710,9 +710,9 @@ class Gutenberg(object):
              Metadata.encoding, Metadata.last_modified,
              Data.when_downloaded
       FROM Search INNER JOIN Metadata ON Search.key = Metadata.key
-         	      LEFT OUTER JOIN Data ON Metadata.key = Data.key
+                  LEFT OUTER JOIN Data ON Metadata.key = Data.key
       WHERE Search MATCH ?
-         	AND Metadata.last_modified > COALESCE(Data.last_modified, '')
+            AND Metadata.last_modified > COALESCE(Data.last_modified, '')
       """, (query,)))
       if keys:
          self.download_keys(keys)
@@ -726,10 +726,10 @@ class Gutenberg(object):
              Metadata.encoding, Metadata.last_modified,
              COALESCE(Data.when_downloaded, '') AS downloaded
       FROM Search INNER JOIN Metadata ON Search.key = Metadata.key
-            	   INNER JOIN DownloadQueries
-         	      LEFT OUTER JOIN Data ON Metadata.key = Data.key
+                  INNER JOIN DownloadQueries
+                  LEFT OUTER JOIN Data ON Metadata.key = Data.key
       WHERE Search MATCH query
-         	AND Metadata.last_modified > COALESCE(Data.last_modified, '')
+            AND Metadata.last_modified > COALESCE(Data.last_modified, '')
       UNION
       SELECT Metadata.key, Metadata.name,
              Metadata.encoding, Metadata.last_modified,
