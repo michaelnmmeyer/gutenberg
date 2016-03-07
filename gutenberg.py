@@ -46,7 +46,7 @@
 # limitations under the License.
 
 import os, sys, re, sqlite3, tarfile, json
-import random, urllib, unicodedata, zlib, time, datetime
+import random, urllib, unicodedata, zlib, time, datetime, http.client
 from urllib.request import urlopen
 from xml.etree import ElementTree
 from multiprocessing import Pool
@@ -601,7 +601,7 @@ def try_download(args):
          return download(key, name, encoding, last_modified, downloaded)
       except KeyboardInterrupt:
          die()
-      except (urllib.error.URLError, urllib.error.HTTPError):
+      except (urllib.error.URLError, urllib.error.HTTPError, http.client.RemoteDisconnected):
          if tries >= MAX_RETRY:
             inform("cannot download '%s': connection error" % key)
             return
