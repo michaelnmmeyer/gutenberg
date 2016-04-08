@@ -668,9 +668,9 @@ class Gutenberg(object):
       self.conn = sqlite3.connect(self.path)
       cur = self.conn.cursor()
       cur.executescript(SCHEMA)
-      if not cur.execute("""SELECT
-         datetime(value, '+7 day') > datetime('now')
-         FROM Infos WHERE key = 'last_catalog_update'""").fetchone():
+      if cur.execute("""SELECT
+         COALESCE(1, datetime('now', '-7 day') > datetime(value))
+         FROM Infos WHERE key = 'last_catalog_update'""").fetchone()[0]:
          self.update_catalog()
 
    def update_catalog(self):
