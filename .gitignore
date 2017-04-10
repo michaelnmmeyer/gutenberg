@@ -31,6 +31,9 @@
 # Debug files
 *.dSYM/
 
+# Python junk
+__pycache__/
+
 # Private
 lab/
 README.tpl

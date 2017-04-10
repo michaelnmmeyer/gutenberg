@@ -19,18 +19,18 @@ Gutenberg. It can do the following:
 
 Python3 is required. On Debian and derivatives, you can install it with:
 
-    sudo apt-get install python3
+    $ sudo apt-get install python3
 
 Then, if you want to download the full repository:
 
-    git clone https://github.com/michaelnmmeyer/gutenberg
-    sudo make -C gutenberg install
+    $ git clone https://github.com/michaelnmmeyer/gutenberg
+    $ sudo make -C gutenberg install
 
 Alternatively, you can just copy the script to some location in your `PATH`:
 
-    wget https://raw.githubusercontent.com/michaelnmmeyer/gutenberg/master/gutenberg.py
-    sudo install -pm 0755 gutenberg.py /usr/local/bin/gutenberg
-    rm gutenberg.py
+    $ wget https://raw.githubusercontent.com/michaelnmmeyer/gutenberg/master/gutenberg.py
+    $ sudo install -pm 0755 gutenberg.py /usr/local/bin/gutenberg
+    $ rm gutenberg.py
 
 ## Basics
 
@@ -40,8 +40,7 @@ matching ebooks as follows:
     $ gutenberg search "language:it AND subject:history"
 
 (The Gutenberg catalog is downloaded when the database is created, so the above
-will take a few minutes at first. Subsequent queries will be faster. Afterwards,
-the catalog will be updated every week.)
+will take a few minutes at first. Subsequent queries will be faster.)
 
 If results seem legit, we can download all matching ebooks with:
 
@@ -56,8 +55,8 @@ be done by issuing the following from time to time:
 
     $ gutenberg update
 
-The above executes again all submitted download queries, looking for newly added
-ebooks, and updates already downloaded ebooks.
+The above updates the Gutenberg catalog if necessary, then executes again all
+submitted download queries, looking for newly added ebooks and emended ones.
 
 If, for some reason, we're not interested anymore in a subject, we can stop
 automatically downloading new ebooks about it by issuing the following:
@@ -121,8 +120,8 @@ created at `~/.gutenberg`. Its schema is the following:
     /* Informations about the state of the database.
      * Possible keys are:
      * - last_catalog_update: last day the Gutenberg catalog was updated. If not
-     *   present or if the catalog has not been updated in a while, the catalog is
-     *   updated at startup.
+     *   present, the catalog will be updated at startup. The catalog can be
+     *   updated with the "update" command.
      */
     CREATE TABLE IF NOT EXISTS Infos(
        key TEXT PRIMARY KEY UNIQUE NOT NULL,

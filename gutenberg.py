@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright (c) 2016, Michaël Meyer
+# Copyright (c) 2016-17, Michaël Meyer
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -85,8 +85,8 @@ SCHEMA = """\
 /* Informations about the state of the database.
  * Possible keys are:
  * - last_catalog_update: last day the Gutenberg catalog was updated. If not
- *   present or if the catalog has not been updated in a while, the catalog is
- *   updated at startup.
+ *   present, the catalog will be updated at startup. The catalog can be
+ *   updated with the "update" command.
  */
 CREATE TABLE IF NOT EXISTS Infos(
    key TEXT PRIMARY KEY UNIQUE NOT NULL,
@@ -668,9 +668,7 @@ class Gutenberg(object):
       self.conn = sqlite3.connect(self.path)
       cur = self.conn.cursor()
       cur.executescript(SCHEMA)
-      if cur.execute("""SELECT
-         COALESCE(1, datetime('now', '-7 day') > datetime(value))
-         FROM Infos WHERE key = 'last_catalog_update'""").fetchone()[0]:
+      if not cur.execute("SELECT value FROM Infos WHERE key = 'last_catalog_update'").fetchone():
          self.update_catalog()
 
    def update_catalog(self):
@@ -695,7 +693,7 @@ class Gutenberg(object):
       self.conn.commit()
 
    def search(self, query):
-      query = normalize(str(query))   
+      query = normalize(str(query)) 
       for (metadata,) in self.conn.execute("""SELECT metadata
          FROM Metadata NATURAL JOIN Search WHERE Search match ?""", (query,)):
          yield json.loads(metadata)
@@ -737,6 +735,10 @@ class Gutenberg(object):
 
    def update(self):
       cur = self.conn.cursor()
+      # Update the catalog if need be.
+      if cur.execute("""SELECT datetime('now', '-1 day') > datetime(value)
+         FROM Infos WHERE key = 'last_catalog_update'""").fetchone()[0]:
+         self.update_catalog()
       # We download new files first, then update the ones we've already
       # downloaded.
       keys = list(cur.execute("""
@@ -821,9 +823,9 @@ Search commands:
 
 Download commands:
    download <query>  download all ebooks matching a query
-   forget <query>    don't download new ebooks matching a query
-   update            download new ebooks matching submitted queries, update
-                       downloaded ebooks"""
+   forget <query>    don't download new ebooks matching a submitted query
+   update            update the catalog, download new ebooks matching submitted
+                       queries, update downloaded ebooks that have been emended"""
 
 def usage():
    me = os.path.basename(sys.argv[0])
