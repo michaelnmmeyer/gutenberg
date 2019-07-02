@@ -654,8 +654,9 @@ def iter_catalog(url):
       tinfo = tf.next()
       if not tinfo:
          break
-      key = int(os.path.basename(os.path.dirname(tinfo.name)))
-      yield key, tf.extractfile(tinfo)
+      key = os.path.basename(os.path.dirname(tinfo.name))
+      if key.isdigit():
+         yield int(key), tf.extractfile(tinfo)
 
 
 class Gutenberg(object):
