@@ -66,6 +66,26 @@ CATALOG_URL = "http://www.gutenberg.org/cache/epub/feeds/rdf-files.tar.bz2"
 # Where to find the list of Gutenberg mirrors.
 MIRRORS_URL = "https://www.gutenberg.org/MIRRORS.ALL"
 
+# https://stackoverflow.com/questions/295135/turn-a-string-into-a-valid-filename
+import unicodedata
+import re
+
+def slugify(value, allow_unicode=False):
+    """
+    Taken from https://github.com/django/django/blob/master/django/utils/text.py
+    Convert to ASCII if 'allow_unicode' is False. Convert spaces or repeated
+    dashes to single dashes. Remove characters that aren't alphanumerics,
+    underscores, or hyphens. Convert to lowercase. Also strip leading and
+    trailing whitespace, dashes, and underscores.
+    """
+    value = str(value)
+    if allow_unicode:
+        value = unicodedata.normalize('NFKC', value)
+    else:
+        value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
+    value = re.sub(r'[^\w\s-]', '', value.lower())
+    return re.sub(r'[-\s]+', '-', value).strip('-_')
+
 # List of Gutenberg HTTP mirrors.
 def gutenberg_mirrors():
    tbl = getattr(gutenberg_mirrors, "tbl", None)
@@ -704,7 +724,13 @@ class Gutenberg(object):
       for (blob,) in self.conn.execute("""SELECT contents
          FROM Data NATURAL JOIN Search WHERE Search match ?""", (query,)):      
          yield zlib.decompress(blob).decode()
-   
+
+   def file(self, query):
+      query = normalize(str(query))
+      for (author, title, blob) in self.conn.execute("""SELECT author, title, contents
+         FROM Data NATURAL JOIN Search WHERE Search match ?""", (query,)):
+         yield author, title, blob
+
    def queries(self):
       for (q,) in self.conn.execute("""SELECT query FROM DownloadQueries
          ORDER BY last_issued DESC"""):
@@ -791,6 +817,21 @@ def cmd_text(argv):
    for text in Gutenberg().text(argv[0]):
       sys.stdout.write(text)
 
+def cmd_file(argv):
+   for author, title, blob in Gutenberg().file(argv[0]):
+      normalized_author = slugify(author)
+      normalized_title = slugify(title)
+      if not os.path.exists(normalized_author):
+         print(f"create directory: {normalized_author}")
+         os.makedirs(normalized_author)
+      target = os.path.join(normalized_author, normalized_title)
+      if not os.path.exists(target):
+         print(f"create file: {target}")
+         with open(target, "w") as f:
+            f.write(zlib.decompress(blob).decode())
+      else:
+         print(f"file exists, skipping: {target}")
+
 def cmd_download(argv):
    Gutenberg().download(argv[0])
 
@@ -807,6 +848,7 @@ def cmd_queries(argv):
 COMMANDS = {
    "search": {"func": cmd_search, "argc": 1},
    "text": {"func": cmd_text, "argc": 1},
+   "file": {"func": cmd_file, "argc": 1},
    "download": {"func": cmd_download, "argc": 1},
    "queries": {"func": cmd_queries, "argc": 0},
    "update": {"func": cmd_update, "argc": 0},
@@ -820,6 +862,7 @@ Access ebooks from the Project Gutenberg.
 Search commands:
    search <query>    display metadata of ebooks matching a query
    text <query>      display the contents of downloaded ebooks matching a query
+   file <query>      save downloaded ebooks to disk, as [AUTHOR]/[TITlE].txt 
    queries           display a list of submitted download queries
 
 Download commands:
