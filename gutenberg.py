@@ -819,12 +819,12 @@ def cmd_text(argv):
 
 def cmd_file(argv):
    for author, title, blob in Gutenberg().file(argv[0]):
-      normalized_author = slugify(author)
-      normalized_title = slugify(title)
+      normalized_author = slugify(author)[:32]
+      normalized_title = slugify(title)[:48]
       if not os.path.exists(normalized_author):
          print(f"create directory: {normalized_author}")
          os.makedirs(normalized_author)
-      target = os.path.join(normalized_author, normalized_title)
+      target = os.path.join(normalized_author, normalized_title) + ".txt"
       if not os.path.exists(target):
          print(f"create file: {target}")
          with open(target, "w") as f:
