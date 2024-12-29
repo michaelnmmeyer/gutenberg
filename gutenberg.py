@@ -821,16 +821,13 @@ def cmd_file(argv):
    for author, title, blob in Gutenberg().file(argv[0]):
       normalized_author = slugify(author)[:32]
       normalized_title = slugify(title)[:48]
-      if not os.path.exists(normalized_author):
-         print(f"create directory: {normalized_author}")
-         os.makedirs(normalized_author)
-      target = os.path.join(normalized_author, normalized_title) + ".txt"
-      if not os.path.exists(target):
-         print(f"create file: {target}")
+      target = f"{normalized_author}_{normalized_title}.txt"
+      if os.path.exists(target):
+         print(f"SKIPPING: file already exists: {target}")
+      else:
          with open(target, "w") as f:
             f.write(zlib.decompress(blob).decode())
-      else:
-         print(f"file exists, skipping: {target}")
+         print(f"WRITING: {target}")
 
 def cmd_download(argv):
    Gutenberg().download(argv[0])
